@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Dimensions, ActivityIndicator, Platform, useWindowDimensions } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import React, { useState, useEffect, useRef } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, Dimensions, ActivityIndicator, Platform, useWindowDimensions, Linking } from 'react-native';
+// import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
+import * as ImageManipulator from 'expo-image-manipulator';
 import Svg, { Rect, Text as SvgText } from 'react-native-svg';
-import { fetchPrediction, searchImageWithDescription } from '../api/search';
-
-const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
+import {fetchPrediction} from '../api/fetchPrediction';
 
 interface Detection {
   x: number;
@@ -15,31 +15,64 @@ interface Detection {
 }
 
 export default function CameraDescription() {
+  const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
+  
+  // react-native-vision-camera
+  const { hasPermission, requestPermission } = useCameraPermission();
+  // expo-camera
+  // const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<'front' | 'back'>('back');
-  const [permission, requestPermission] = useCameraPermissions();
+  
+  const device = useCameraDevice(facing);
+
   const [detections, setDetections] = useState<Detection[]>([]);// 検出結果格納用(座標・ラベル)
   const [isDetectingFrag, setIsDetectingFrag] = useState(false);// 絵画の要素探す通信状態管理
   const [isDetectingCamvas, setIsDetectingCamvas] = useState(false);// 絵画フレーム探す通信状態管理
-  const cameraRef = useRef<CameraView>(null);
-  const lastResultRef = useRef<any>(null);// 読み取った画像が前回の画像と一致しているか確認するためのもの
-  const sameCountRef = useRef<number>(0);// 同じだったカウンタ
-  const threshold = 2; // 2回連続で同じ結果なら確定
 
-  const my_api_key = process.env.MY_API_KEY || '';
+  // react-native-vision-camera
+  const cameraRef = useRef<Camera>(null);
+  // expo-camera
+  // const cameraRef = useRef<CameraView>(null);
+
+  useEffect(() => {
+    if(!hasPermission){
+      requestPermission();
+    }
+  }, [hasPermission]);
 
   const photoData = async () => {
-    if(!cameraRef.current) return;
+    if(!cameraRef.current || !device) return null;
 
     try {
-      const options = {
-        base64: true,
-        quality: 0.5,
-        skipProcessing: true,
-      };
+      // react-native-vision-camera
+      // カメラ画像を取得する
+      const photoFile = await cameraRef.current.takePhoto({
+        flash: 'off',
+        enableShutterSound: false,
+      });
+      
+      const manipulated = await ImageManipulator.manipulateAsync(
+        photoFile.path,
+        [{ resize: { width: 640 } }],
+        { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      );
 
-      const photo = await cameraRef.current.takePictureAsync(options);
+      return {
+        width: manipulated.width,
+        height: manipulated.height,
+        base64: manipulated.base64,
+      }
 
-      return photo;
+      // expo-camera
+      // const options = {
+      //   base64: true,
+      //   quality: 0.5,
+      //   skipProcessing: true,
+      // };
+
+      // const photo = await cameraRef.current.takePictureAsync(options);
+
+      // return photo;
     }catch (error) {
       console.warn("Capture Error:", error);
       return null;
@@ -59,52 +92,53 @@ export default function CameraDescription() {
       const photo = await photoData();
 
       if(!photo || !photo.base64) return;
-     
+
+      
       // 外部APIに取得した画像をPOSTメソッドで送信
       const result = await fetchPrediction(photo.base64);
-     
+      
       let imgW = photo.width;
       let imgH = photo.height;
-      let isRotated = false;
+      // let isRotated = false;
 
-      if (Platform.OS !== 'web') {
-        imgW = Math.min(photo.width, photo.height);
-        imgH = Math.max(photo.width, photo.height);
-        isRotated = true;
-      }
+      // if (Platform.OS !== 'web') {
+      //   imgW = Math.min(photo.width, photo.height);
+      //   imgH = Math.max(photo.width, photo.height);
+      //   isRotated = true;
+      // }
 
       const scale = Math.max(SCREEN_WIDTH / imgW, SCREEN_HEIGHT / imgH);
 
       const dx = (SCREEN_WIDTH - imgW * scale) / 2;
       const dy = (SCREEN_HEIGHT - imgH * scale) / 2;
-     
+      
       if (result.predictions && result.predictions.length > 0) {
         // 座標変換処理
         const adaptedDetections = result.predictions.map((p: any) => {
-         
+          
           let finalX, finalY, finalWidth, finalHeight;
           const roboX = p.x;
           const roboY = p.y;
           const roboW = p.width;
           const roboH = p.height;
 
-          if (isRotated) {
+          // if (isRotated) {
              // 【モバイル（縦画面）用】: 90度回転しているのでXとYを入れ替える
              // Roboflow X -> 画面 Y
              // Roboflow Y -> 画面 X
-             finalY = (roboX - roboW / 2) * scale + dy;
-             finalX = (roboY - roboH / 2) * scale + dx;
-             finalHeight = roboW * scale;
-             finalWidth = roboH * scale;
-          } else {
-             // 【Web / PCブラウザ用】: 回転なし。そのままマッピング
+            //  finalY = (roboX - roboW / 2) * scale + dy;
+            //  finalX = (roboY - roboH / 2) * scale + dx;
+            //  finalHeight = roboW * scale;
+            //  finalWidth = roboH * scale;
+          // } else {
+          //    // 【Web / PCブラウザ用】: 回転なし。そのままマッピング
              finalX = (roboX - roboW / 2) * scale + dx;
              finalY = (roboY - roboH / 2) * scale + dy;
              finalWidth = roboW * scale;
              finalHeight = roboH * scale;
-          }
+          // }
 
-          if(facing === 'front' || Platform.OS === 'web') {
+          if(facing === 'front') {
             finalX = SCREEN_WIDTH -finalX -finalWidth;
           }
 
@@ -117,7 +151,7 @@ export default function CameraDescription() {
             label: p.class, // APIによっては p.class または p.label
           };
         });
-       
+        
         // 確認用
         console.log("Predictions:", adaptedDetections[0]);
         console.log("WinW:", SCREEN_WIDTH);
@@ -136,35 +170,10 @@ export default function CameraDescription() {
     }
   };
 
-  // 絵画の情報を取得するapiをたたく
   const talkWithAI = async () => {
     if(isDetectingCamvas) return;
     try{
-      // 通信の混戦を防ぐ
       setIsDetectingCamvas(true);
-
-      const photo = await photoData();
-      
-      if(!photo || !photo.base64) return;
-     
-      // バックエンドに取得した画像と閾値をPOSTメソッドで送信
-      const result = await searchImageWithDescription(photo.base64, 0.8);
-
-      // もしレスポンスがあるなら前回のレスポンスと見比べる
-      if(result.success && result.results) {
-        const paintingId = result.results.painting.objectID;
-
-        if(paintingId === lastResultRef.current) {
-          sameCountRef.current += 1;
-        } else {
-          sameCountRef.current = 1;
-          lastResultRef.current = paintingId;
-        }
-      } else {
-        sameCountRef.current = 0;
-      }
-    } catch (error) {
-      console.log("searchImage Error:", (error as Error).message);
     }finally{
       setIsDetectingCamvas(false);
     }
@@ -175,41 +184,36 @@ export default function CameraDescription() {
 
     const loop = async () => {
       // 権限があり、かつマウント中なら実行
-      if (permission?.granted && isMounted) {
+      if (hasPermission && isMounted && device) {
         await detectObjects();
         // 処理が終わってから次の実行まで少し待機（例: 100ms）
-        if (isMounted) setTimeout(loop, 100);
+        if (isMounted) setTimeout(loop, 100); 
       }
     };
 
-    if (permission?.granted) {
+    if (hasPermission) {
       loop(); // ループ開始
     }
 
     return () => {
       isMounted = false; // クリーンアップ
     };
-  }, [permission]);
+  }, [hasPermission, device]);
 
   // 権限の確認中
-  if (!permission) {
+  if (hasPermission) {
     return (
-      <View>
-        <ActivityIndicator size="large" color="#2196F3" />
+      <View style={styles.centered}>
+        <Text style={styles.message}>カメラの使用許可が必要です</Text>
+        <TouchableOpacity style={styles.button} onPress={() => Linking.openSettings()}>
+          <Text style={styles.buttonText}>設定を開く</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
-  // 権限がない場合
-  if (!permission.granted) {
-    return (
-      <View style={styles.centered}>
-        <Text style={styles.message}>カメラの使用許可が必要です</Text>
-        <TouchableOpacity style={styles.button} onPress={requestPermission}>
-          <Text style={styles.buttonText}>許可する</Text>
-        </TouchableOpacity>
-      </View>
-    );
+  if (device == null) {
+    return <ActivityIndicator size="large" color="#2196F3" style={{flex: 1}} />;
   }
 
   function toggleCamera() {
@@ -218,12 +222,20 @@ export default function CameraDescription() {
 
   return (
     <View style={styles.container}>
-    {/* CameraViewを画面いっぱいに広げる */}
-      <CameraView
+      {/* react-native-vision-camera */}
+      <Camera
         ref={cameraRef}
-        style={StyleSheet.absoluteFillObject}
+        style={StyleSheet.absoluteFill}
+        device={device}
+        isActive={true}
+        photo={true}
+      />
+      {/* expo-camera */}
+      {/* <CameraView 
+        ref={cameraRef} 
+        style={StyleSheet.absoluteFillObject} 
         facing={facing}
-      >
+      > */}
         <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
           <Svg style={styles.rect} pointerEvents="none">
             {/* svgレイヤーのテスト用 */}
@@ -260,18 +272,18 @@ export default function CameraDescription() {
               styles.indicator,
               { backgroundColor: isDetectingFrag ? '#FFA500' : '#00FF00' }
             ]} />
-            <Text>
+            <Text style={{color: 'white', fontWeight: 'bold'}}>
               {isDetectingFrag ? "推論中..." : "ライブビュー"}
             </Text>
           </View>
-         
+          
           <View style={styles.controls}>
             <TouchableOpacity style={styles.flipButton} onPress={toggleCamera}>
               <Text style={styles.flipText}>カメラ切替</Text>
             </TouchableOpacity>
           </View>
         </View>
-      </CameraView>
+      {/* </CameraView> */}
     </View>
   );
 }
@@ -304,10 +316,6 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 30,
     elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
   },
   buttonText: {
     color: '#fff',
@@ -318,16 +326,7 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     padding: 30,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    alignSelf: 'flex-start',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    marginTop: Platform.OS === 'ios' ? 40 : 10,
+    justifyContent: 'space-between',
   },
   indicator: {
     width: 10,
@@ -335,15 +334,7 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     marginRight: 10,
   },
-  statusText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
   controls: {
-    flex: 1,
-    justifyContent: 'flex-end',
     alignItems: 'center',
   },
   flipButton: {
@@ -353,7 +344,6 @@ const styles = StyleSheet.create({
     borderRadius: 30,
     borderWidth: 1.5,
     borderColor: 'rgba(255,255,255,0.4)',
-    backdropFilter: 'blur(10px)',
   },
   flipText: {
     color: '#fff',
