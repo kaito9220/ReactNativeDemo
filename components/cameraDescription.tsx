@@ -35,6 +35,7 @@ export default function CameraDescription() {
         base64: true,
         quality: 0.5,
         skipProcessing: true,
+        shutterSound: false,
       };
 
       const photo = await cameraRef.current.takePictureAsync(options);
